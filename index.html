@@ -62,7 +62,10 @@ table.rec{border-collapse:collapse;width:100%;min-width:900px}
 .rec tr.st-more td:first-child{box-shadow:inset -4px 0 0 #1f9d55}.rec tr.st-less td:first-child{box-shadow:inset -4px 0 0 var(--dan)}
 .rec tr.sel td{box-shadow:inset 0 2px 0 var(--ink),inset 0 -2px 0 var(--ink)}
 .badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:600;white-space:nowrap;color:#fff}
-.badge.more{background:#1f9d55}.badge.less{background:var(--dan)}
+.badge.more{background:#1f9d55}.badge.less{background:var(--dan)}.badge.other{background:var(--pri)}
+.addbox{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:16px}.addbox.open{display:flex}
+.addbox .dlg{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:380px;box-shadow:0 12px 40px rgba(0,0,0,.35)}
+.addbox h3{margin:0 0 10px;font-size:16px}.addbox .row{display:flex;gap:8px;margin-top:14px;justify-content:flex-start}
 select.st-more{background:var(--mbg);border-color:#1f9d55;font-weight:600}
 select.st-less{background:var(--lbg);border-color:var(--dan);font-weight:600}
 .empty{padding:30px;text-align:center;color:var(--mut)}
@@ -156,7 +159,7 @@ select.st-less{background:var(--lbg);border-color:var(--dan);font-weight:600}
     <form id="f" autocomplete="off">
       <div class="grid" style="margin-top:10px">
         <div><label>بەروار</label><input type="date" id="fDate" required></div>
-        <div><label>دۆخ</label><select id="fStatus"><option value="">— هەڵبژێرە —</option><option value="زیاد هاتووە">زیاد هاتووە</option><option value="کەم هاتووە">کەم هاتووە</option></select></div>
+        <div><label>دۆخ</label><select id="fStatus"></select></div>
         <div><label>کۆد و ناوی کەرەستە</label><input type="text" id="fItem" placeholder="گەڕان بە کۆد یان ناو…"></div>
         <div><label>کۆد و ناوی ماڕکێت</label><input type="text" id="fMarket" placeholder="گەڕان بە کۆد یان ناو…"></div>
         <div><label>ناوی شۆفێر</label><select id="fDriver"></select></div>
@@ -210,6 +213,7 @@ select.st-less{background:var(--lbg);border-color:var(--dan);font-weight:600}
   <div class="mfoot"><button class="pri" id="pDown">دابەزاندنی PDF</button><button id="pPrint">چاپکردن</button><button class="wa" id="pShare">ناردنی PDF</button></div>
 </div>
 <div id="pMeasure"></div><div id="printRoot"></div>
+<div class="addbox" id="addBox" role="dialog" aria-modal="true"><div class="dlg"><h3 id="addTitle"></h3><input type="text" id="addInput" autocomplete="off"><div class="row"><button type="button" class="pri" id="addOk">زیادکردن</button><button type="button" id="addCancel">پاشگەزبوونەوە</button></div></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -229,24 +233,81 @@ const fields = [
 ];
 
 const LISTS = {
+  fStatus: ['زیاد هاتووە','کەم هاتووە'],
   fDriver: ['احسان','کۆژین','بیلال','زانا','گۆران','سەلمان','بەژدار'],
   fReceiver: ['عمر','یاسر','محمد ١','محمد ٢','هەرێم','دانا ١','دانا ٢','عبداللە','باوەڕ','تەیب'],
   fCounter: ['اسماعیل','احمد'],
 };
+const LIST_LABELS = { fStatus:'دۆخ', fDriver:'ناوی شۆفێر', fCounter:'ناوی جەردکەرەوە', fReceiver:'ناوی وەسلدانەر' };
+const ADD_VAL = '__add_new__';
+const CKEY = 'dropdown_custom_v1';
+let CUSTOM = {};
+try{ CUSTOM = JSON.parse(localStorage.getItem(CKEY)||'{}') || {}; }catch(e){ CUSTOM = {}; }
+function saveCustom(){ try{ localStorage.setItem(CKEY, JSON.stringify(CUSTOM)); }catch(e){} }
+function listFor(id){ return [...LISTS[id], ...(CUSTOM[id]||[])]; }
 function fillSelects(){
-  Object.entries(LISTS).forEach(([id,names])=>{
-    const s = $(id);
-    s.innerHTML = '<option value="">— هەڵبژێرە —</option>' + names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  Object.keys(LISTS).forEach(id=>{
+    const s = $(id), cur = s.value;
+    s.innerHTML = '<option value="">— هەڵبژێرە —</option>'
+      + listFor(id).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')
+      + `<option value="${ADD_VAL}">＋ زیادکردنی نوێ…</option>`;
+    s.value = cur; s.dataset.prev = s.value;
   });
+}
+// add a value to a dropdown's list (returns the stored value, or '' if empty)
+function addToList(id, val){
+  val = String(val||'').trim(); if(!val) return '';
+  const all = listFor(id), hit = all.find(x=>norm(x)===norm(val));
+  if(hit) return hit;                       // already exists (ignoring letter variants)
+  (CUSTOM[id] = CUSTOM[id]||[]).push(val); saveCustom();
+  return val;
 }
 // set a field value; for dropdowns, keep names that are not in the list (old/imported records)
 function setField(id,val){
   const el = $(id);
   if(el.tagName==='SELECT' && val && ![...el.options].some(o=>o.value===val)){
-    const o = document.createElement('option'); o.value=val; o.textContent=val; el.appendChild(o);
+    const o = document.createElement('option'); o.value=val; o.textContent=val;
+    el.insertBefore(o, el.lastElementChild);   // keep the "add new" option last
   }
   el.value = val;
+  if(el.tagName==='SELECT') el.dataset.prev = el.value;
 }
+// "add new value" dialog
+let addTarget = null;
+function openAdd(id){
+  addTarget = id;
+  $('addTitle').textContent = 'زیادکردنی نوێ — ' + LIST_LABELS[id];
+  $('addInput').value = '';
+  $('addBox').classList.add('open');
+  setTimeout(()=>$('addInput').focus(),30);
+}
+function closeAdd(restore){
+  $('addBox').classList.remove('open');
+  if(restore && addTarget){ const el=$(addTarget); el.value = el.dataset.prev||''; if(addTarget==='fStatus') paintStatusSelect(); }
+  addTarget = null;
+}
+function confirmAdd(){
+  const id = addTarget, v = $('addInput').value.trim();
+  if(!v){ $('addInput').focus(); return; }
+  const stored = addToList(id, v);
+  addTarget = null; $('addBox').classList.remove('open');
+  fillSelects(); setField(id, stored);
+  if(id==='fStatus') paintStatusSelect();
+  toast('زیادکرا: '+stored);
+}
+$('addOk').onclick = confirmAdd;
+$('addCancel').onclick = ()=>closeAdd(true);
+$('addBox').addEventListener('mousedown',e=>{ if(e.target===$('addBox')) closeAdd(true); });
+$('addInput').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){ e.preventDefault(); confirmAdd(); }
+  else if(e.key==='Escape'){ e.preventDefault(); closeAdd(true); }
+});
+Object.keys(LISTS).forEach(id=>{
+  $(id).addEventListener('change',()=>{
+    const el = $(id);
+    if(el.value===ADD_VAL) openAdd(id); else el.dataset.prev = el.value;
+  });
+});
 fillSelects();
 
 let records = load();
@@ -312,7 +373,7 @@ function render(){
     const L=(l,v)=>`<td data-label="${l}">${v}</td>`;
     tr.innerHTML=`<td class="ck"><input type="checkbox" data-sel="${r.id}" ${selected.has(r.id)?'checked':''} aria-label="هەڵبژێرە"></td>`+
       `<td class="idx" data-label="#">${i+1}</td>`+L('کەرەستە',esc(r.item))+L('ماڕکێت',esc(r.market))+L('شۆفێر',esc(r.driver))+L('جەردکەرەوە',esc(r.counter))+L('وەسلدانەر',esc(r.receiver))+L('ئەنجام',esc(r.result))+L('بەروار',esc(r.date))+
-      L('دۆخ',r.status?`<span class="badge ${r.status===ST_MORE?'more':'less'}">${esc(r.status)}</span>`:'')+
+      L('دۆخ',r.status?`<span class="badge ${r.status===ST_MORE?'more':r.status===ST_LESS?'less':'other'}">${esc(r.status)}</span>`:'')+
       `<td class="act"><button data-edit="${r.id}">دەستکاری</button> <button class="dan" data-del="${r.id}">سڕینەوە</button></td>`;
     tb.appendChild(tr);
   });
@@ -492,6 +553,11 @@ $('importFile').onchange = async e=>{
       fields.forEach(([k])=>rec[k]=o[k]||'');
       records.push(rec); added++;
     });
+    let newVals=false;
+    [['driver','fDriver'],['counter','fCounter'],['receiver','fReceiver'],['status','fStatus']].forEach(([k,id])=>{
+      arr.forEach(o=>{ const v=o&&o[k]; if(v&&!listFor(id).some(x=>norm(x)===norm(v))){ addToList(id,v); newVals=true; } });
+    });
+    if(newVals) fillSelects();
     persist(); render(); toast(added+' تۆمار هێنرا');
   }catch(err){ toast('فایلی JSON دروست نییە'); }
   e.target.value='';
@@ -665,7 +731,7 @@ async function rebuild(){
     host.appendChild(sh); const o={sh,body:sh.querySelector('.sh-body'),tb:sh.querySelector('tbody')}; list.push(o); return o;
   };
   const over=o=>o.body.scrollHeight>o.body.clientHeight+1;
-  const mkRow=(r,i)=>{const tr=document.createElement('tr'); if(S.stcolor&&r.status)tr.className=r.status===ST_MORE?'sm':'sl';
+  const mkRow=(r,i)=>{const tr=document.createElement('tr'); if(S.stcolor&&(r.status===ST_MORE||r.status===ST_LESS))tr.className=r.status===ST_MORE?'sm':'sl';
     tr.innerHTML=cols.map(c=>{const k=c[0],v=k==='idx'?i+1:r[k];return `<td${k==='status'&&S.stcolor&&v?' class="stx"':''}>${esc(v)}</td>`}).join(''); return tr;};
   let cur=mkSheet(true);
   for(let i=0;i<rows.length;i++){
